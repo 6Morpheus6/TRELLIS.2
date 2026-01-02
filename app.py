@@ -514,7 +514,7 @@ def extract_glb(
     return glb_path, glb_path
 
 
-with gr.Blocks(delete_cache=(600, 600)) as demo:
+with gr.Blocks(delete_cache=(600, 600), css=css, head=head) as demo:
     gr.Markdown("""
     ## Image to 3D Asset with [TRELLIS.2](https://microsoft.github.io/TRELLIS.2)
     * Upload an image (preferably with an alpha-masked foreground object) and click Generate to create a 3D asset.
@@ -642,4 +642,4 @@ if __name__ == "__main__":
         )),
     }
     
-    demo.launch(css=css, head=head)
+    demo.launch()
