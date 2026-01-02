@@ -6,6 +6,7 @@ os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 from datetime import datetime
 import shutil
 import cv2
+import gc
 from typing import *
 import torch
 import numpy as np
@@ -401,7 +402,8 @@ def image_to_3d(
     mesh.simplify(16777216) # nvdiffrast limit
     images = render_utils.render_snapshot(mesh, resolution=1024, r=2, fov=36, nviews=STEPS, envmap=envmap)
     state = pack_state(latents)
-    torch.cuda.empty_cache()
+    gc.collect(),
+    torch.cuda.empty_cache(),
     
     # --- HTML Construction ---
     # The Stack of 48 Images
