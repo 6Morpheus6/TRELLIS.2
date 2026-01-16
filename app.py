@@ -1,6 +1,7 @@
 import gradio as gr
 
 import os
+import sys
 os.environ['OPENCV_IO_ENABLE_OPENEXR'] = '1'
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 from datetime import datetime
@@ -13,12 +14,16 @@ import numpy as np
 from PIL import Image
 import base64
 import io
+import warnings
+import subprocess
+import pickle
 from trellis2.modules.sparse import SparseTensor
 from trellis2.pipelines import Trellis2ImageTo3DPipeline
 from trellis2.renderers import EnvMap
 from trellis2.utils import render_utils
 import o_voxel
 
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 MAX_SEED = np.iinfo(np.int32).max
 TMP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'tmp')
@@ -479,40 +484,75 @@ def extract_glb(
     progress=gr.Progress(track_tqdm=True),
 ) -> Tuple[str, str]:
     """
-    Extract a GLB file from the 3D model.
-
-    Args:
-        state (dict): The state of the generated 3D model.
-        decimation_target (int): The target face count for decimation.
-        texture_size (int): The texture resolution.
-
-    Returns:
-        str: The path to the extracted GLB file.
+    Extract GLB via a subprocess to guarantee memory release.
     """
     user_dir = os.path.join(TMP_DIR, str(req.session_hash))
-    shape_slat, tex_slat, res = unpack_state(state)
-    mesh = pipeline.decode_latent(shape_slat, tex_slat, res)[0]
-    glb = o_voxel.postprocess.to_glb(
-        vertices=mesh.vertices,
-        faces=mesh.faces,
-        attr_volume=mesh.attrs,
-        coords=mesh.coords,
-        attr_layout=pipeline.pbr_attr_layout,
-        grid_size=res,
-        aabb=[[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]],
-        decimation_target=decimation_target,
-        texture_size=texture_size,
-        remesh=True,
-        remesh_band=1,
-        remesh_project=0,
-        use_tqdm=True,
-    )
+    os.makedirs(user_dir, exist_ok=True)
+    
     now = datetime.now()
     timestamp = now.strftime("%Y-%m-%dT%H%M%S") + f".{now.microsecond // 1000:03d}"
-    os.makedirs(user_dir, exist_ok=True)
     glb_path = os.path.join(user_dir, f'sample_{timestamp}.glb')
-    glb.export(glb_path, extension_webp=True)
+    temp_pkl_path = os.path.join(user_dir, f'temp_data_{timestamp}.pkl')
+
+    # 1. Decode Latents im Main Process (nutzt das geladene Modell)
+    # Das ist schnell und braucht VRAM, aber wenig neuen System-RAM
+    print("Decoding latents in main process...")
+    shape_slat, tex_slat, res = unpack_state(state)
+    
+    # Wir holen uns nur das rohe Mesh-Objekt
+    mesh_outputs = pipeline.decode_latent(shape_slat, tex_slat, res)
+    mesh = mesh_outputs[0]
+    
+    # 2. Daten für den Subprozess packen
+    # Wir extrahieren die Numpy/Tensor Daten, um sie zu picklen
+    # WICHTIG: .cpu() sorgt dafür, dass wir keine GPU-Pointer übergeben
+    export_data = {
+        'vertices': mesh.vertices.cpu().numpy() if torch.is_tensor(mesh.vertices) else mesh.vertices,
+        'faces': mesh.faces.cpu().numpy() if torch.is_tensor(mesh.faces) else mesh.faces,
+        'attr_volume': mesh.attrs.cpu().numpy() if torch.is_tensor(mesh.attrs) else mesh.attrs,
+        'coords': mesh.coords.cpu().numpy() if torch.is_tensor(mesh.coords) else mesh.coords,
+        'attr_layout': pipeline.pbr_attr_layout, # Das ist nur eine Liste, kein Tensor
+        'grid_size': res,
+        'decimation_target': decimation_target,
+        'texture_size': texture_size
+    }
+
+    # Aufräumen im Main Process BEVOR wir den Subprozess starten
+    del mesh
+    del mesh_outputs
+    del shape_slat
+    del tex_slat
     torch.cuda.empty_cache()
+
+    # 3. Daten in temporäre Datei schreiben
+    print(f"Saving temporary data to {temp_pkl_path}...")
+    with open(temp_pkl_path, 'wb') as f:
+        pickle.dump(export_data, f)
+        
+    del export_data # RAM im Main Process sofort freigeben
+    gc.collect()
+
+    # 4. Subprozess starten
+    # sys.executable stellt sicher, dass das gleiche Python (venv) genutzt wird
+    print("Starting export subprocess...")
+    cmd = [
+        sys.executable, 
+        "export_script.py", 
+        "--input", temp_pkl_path, 
+        "--output", glb_path
+    ]
+    
+    try:
+        # check=True wirft einen Fehler, wenn der Subprozess crasht
+        subprocess.run(cmd, check=True)
+    except subprocess.CalledProcessError as e:
+        print(f"Export failed: {e}")
+        raise gr.Error("Export failed via subprocess. Check console logs.")
+    finally:
+        # Aufräumen der Temp-Datei
+        if os.path.exists(temp_pkl_path):
+            os.remove(temp_pkl_path)
+
     return glb_path, glb_path
 
 
