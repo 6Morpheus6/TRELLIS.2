@@ -24,6 +24,8 @@ from trellis2.utils import render_utils
 import o_voxel
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", category=UserWarning)
 
 MAX_SEED = np.iinfo(np.int32).max
 TMP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'tmp')
@@ -372,7 +374,7 @@ def image_to_3d(
     tex_slat_rescale_t: float,
     req: gr.Request,
     progress=gr.Progress(track_tqdm=True),
-) -> str:
+) -> Tuple[dict, str, list]:
     # --- Sampling ---
     outputs, latents = pipeline.run(
         image,
@@ -408,7 +410,25 @@ def image_to_3d(
     images = render_utils.render_snapshot(mesh, resolution=1024, r=2, fov=36, nviews=STEPS, envmap=envmap)
     state = pack_state(latents)
     gc.collect(),
-    torch.cuda.empty_cache(),
+    torch.cuda.empty_cache()
+
+    user_dir = os.path.join(TMP_DIR, str(req.session_hash))
+    os.makedirs(user_dir, exist_ok=True)
+    
+    now = datetime.now()
+    timestamp = now.strftime("%Y-%m-%dT%H%M%S")
+    map_paths = []
+    
+    # Wir loopen durch die MODES und speichern jeweils das erste Vorschaubild
+    for mode in MODES:
+        map_img_array = images[mode['render_key']][3] # Das erste Bild (Step 0)
+        map_img = Image.fromarray(map_img_array)
+        
+        # Dateiname z.B. "shaded_forest_20260117.png"
+        map_filename = f"{mode['render_key']}_{timestamp}.png"
+        map_path = os.path.join(user_dir, map_filename)
+        map_img.save(map_path)
+        map_paths.append(map_path)
     
     # --- HTML Construction ---
     # The Stack of 48 Images
@@ -473,7 +493,7 @@ def image_to_3d(
     </div>
     """
     
-    return state, full_html
+    return state, full_html, map_paths
 
 
 def extract_glb(
@@ -531,7 +551,7 @@ def extract_glb(
         
     del export_data # RAM im Main Process sofort freigeben
     gc.collect()
-
+    torch.cuda.empty_cache()
     # 4. Subprozess starten
     # sys.executable stellt sicher, dass das gleiche Python (venv) genutzt wird
     print("Starting export subprocess...")
@@ -600,9 +620,11 @@ with gr.Blocks(delete_cache=(600, 600), css=css, head=head) as demo:
                 with gr.Step("Preview", id=0):
                     preview_output = gr.HTML(empty_html, label="3D Asset Preview", show_label=True, container=True)
                     extract_btn = gr.Button("Extract GLB")
+                    map_download = gr.File(label="Download Texture Maps (PNG)", file_count="multiple", interactive=False)
                 with gr.Step("Extract", id=1):
                     glb_output = gr.Model3D(label="Extracted GLB", height=724, show_label=True, display_mode="solid", clear_color=(0.25, 0.25, 0.25, 1.0))
                     download_btn = gr.DownloadButton(label="Download GLB")
+                
                     
         with gr.Column(scale=1, min_width=172):
             examples = gr.Examples(
@@ -644,7 +666,7 @@ with gr.Blocks(delete_cache=(600, 600), css=css, head=head) as demo:
             shape_slat_guidance_strength, shape_slat_guidance_rescale, shape_slat_sampling_steps, shape_slat_rescale_t,
             tex_slat_guidance_strength, tex_slat_guidance_rescale, tex_slat_sampling_steps, tex_slat_rescale_t,
         ],
-        outputs=[output_buf, preview_output],
+        outputs=[output_buf, preview_output, map_download],
     )
     
     extract_btn.click(

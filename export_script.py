@@ -1,48 +1,77 @@
-# export_script.py
 import os
 import sys
 import argparse
 import pickle
 import torch
 import o_voxel
+import trimesh
+from pygltflib import GLTF2
+
+def patch_glb(filename):
+    try:
+        gltf = GLTF2().load(filename)
+        vertex_views, index_views, image_views = set(), set(), set()
+        for mesh in gltf.meshes:
+            for primitive in mesh.primitives:
+                for attr in primitive.attributes.__dict__.values():
+                    if attr is not None:
+                        vertex_views.add(gltf.accessors[attr].bufferView)
+                if primitive.indices is not None:
+                    index_views.add(gltf.accessors[primitive.indices].bufferView)
+        for image in gltf.images:
+            if image.bufferView is not None:
+                image_views.add(image.bufferView)
+        for i, bv in enumerate(gltf.bufferViews):
+            if i in vertex_views: bv.target = 34962
+            elif i in index_views: bv.target = 34963
+            elif i in image_views: bv.target = None
+            else: bv.target = None
+        gltf.save(filename)
+        print("[Subprocess] Header repair complete.")
+    except Exception as e:
+        print(f"[Subprocess Error] Patching failed: {e}")
 
 def run_export(input_path, output_path):
     print(f"[Subprocess] Loading data from {input_path}...")
-    
-    # Daten laden (Numpy Arrays)
     with open(input_path, 'rb') as f:
         data = pickle.load(f)
 
-    print("[Subprocess] Converting data back to CUDA Tensors...")
-    
-    # WICHTIG: Numpy Arrays wieder in PyTorch Tensors auf der GPU umwandeln
-    # o_voxel benötigt zwingend CUDA Tensors für die Berechnungen
-    vertices = torch.from_numpy(data['vertices']).cuda()
-    faces = torch.from_numpy(data['faces']).cuda()
-    attr_volume = torch.from_numpy(data['attr_volume']).cuda()
-    coords = torch.from_numpy(data['coords']).cuda()
+    print("[Subprocess] Converting data to CUDA...")
+    # Wir schieben es hier direkt auf CUDA, da du 16GB hast und wir in app.py nicht swappen
+    v = torch.from_numpy(data['vertices']).cuda().float() 
+    f = torch.from_numpy(data['faces']).cuda().int()
+    a = torch.from_numpy(data['attr_volume']).cuda().float()
+    c = torch.from_numpy(data['coords']).cuda().float()
 
     print("[Subprocess] Running o_voxel postprocessing...")
-    
     glb = o_voxel.postprocess.to_glb(
-        vertices=vertices,
-        faces=faces,
-        attr_volume=attr_volume,
-        coords=coords,
-        attr_layout=data['attr_layout'],
-        grid_size=data['grid_size'],
+        vertices=v, faces=f, attr_volume=a, coords=c,
+        attr_layout=data['attr_layout'], grid_size=data['grid_size'],
         aabb=[[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]],
         decimation_target=data['decimation_target'],
         texture_size=data['texture_size'],
-        remesh=True,
-        remesh_band=1,
-        remesh_project=0,
-        use_tqdm=True,
+        remesh=True, use_tqdm=True,
     )
 
+    # --- DER ROBUSTE FIX ---
+    print("[Subprocess] Fixing Geometry Normals...")
+    # Wir prüfen, ob es eine Scene oder ein einzelnes Mesh ist
+    if isinstance(glb, trimesh.Scene):
+        for geometry_name in glb.geometry:
+            m = glb.geometry[geometry_name]
+            m.update_faces(m.nondegenerate_faces())
+            m.fix_normals()
+    else:
+        # Es ist direkt ein Trimesh Objekt
+        glb.update_faces(glb.nondegenerate_faces())
+        glb.fix_normals()
+    # --- FIX ENDE ---
+
     print(f"[Subprocess] Exporting to {output_path}...")
-    glb.export(output_path, extension_webp=True)
-    print("[Subprocess] Done. Exiting and releasing memory.")
+    glb.export(output_path, extension_webp=False)
+    
+    patch_glb(output_path)
+    print("[Subprocess] Done.")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -53,9 +82,7 @@ if __name__ == "__main__":
     try:
         run_export(args.input, args.output)
     except Exception as e:
-        # Gibt den detaillierten Fehler an den Hauptprozess zurück
         print(f"[Subprocess Error] {e}")
-        # Traceback auch drucken, falls nötig
         import traceback
         traceback.print_exc()
         sys.exit(1)
