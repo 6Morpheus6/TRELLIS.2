@@ -101,8 +101,26 @@ with gr.Blocks(delete_cache=(600, 600)) as demo:
             resolution = gr.Radio(["512", "1024", "1536"], label="Resolution", value="1024")
             seed = gr.Slider(0, MAX_SEED, label="Seed", value=0, step=1)
             randomize_seed = gr.Checkbox(label="Randomize Seed", value=True)
-            texture_size = gr.Slider(1024, 4096, label="Texture Size", value=2048, step=1024)
-            
+            # Texture size range 512-16384 based on PozzettiAndrea/ComfyUI-TRELLIS2 (nodes/nodes_unwrap.py:266)
+            texture_size = gr.Slider(512, 16384, label="Texture Size", value=2048, step=512)
+            texture_size_warning = gr.HTML(
+                value="",
+                visible=False
+            )
+
+            def update_texture_warning(size):
+                if size > 4096:
+                    return gr.update(
+                        value='<div style="background: #4a3000; border: 1px solid #856404; border-radius: 4px; padding: 8px; margin-top: 4px;">'
+                              '<span style="color: #ffc107;">&#9888;</span> '
+                              '<span style="color: #ffeaa7;"><b>High VRAM Warning:</b> Texture sizes above might require 24GB+ VRAM. '
+                              'Besides, .GLB file sizes increase from ~20mb (4096) to +120mb (on 8192!).</span></div>',
+                        visible=True
+                    )
+                return gr.update(value="", visible=False)
+
+            texture_size.change(fn=update_texture_warning, inputs=[texture_size], outputs=[texture_size_warning])
+
             generate_btn = gr.Button("Generate")
                 
             with gr.Accordion(label="Advanced Settings", open=False):                
