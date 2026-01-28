@@ -2,6 +2,7 @@ import os
 import sys
 import argparse
 import pickle
+import numpy as np
 import torch
 import o_voxel
 import trimesh
@@ -44,6 +45,7 @@ def run_export(input_path, output_path):
     c = torch.from_numpy(data['coords']).cuda().float()
 
     print("[Subprocess] Running o_voxel postprocessing...")
+    print(f"[Subprocess] UV params: cone_angle={data.get('uv_cone_angle', 90.0)}, refine={data.get('uv_refine_iterations', 0)}, global={data.get('uv_global_iterations', 1)}, smooth={data.get('uv_smooth_strength', 1)}")
     glb = o_voxel.postprocess.to_glb(
         vertices=v, faces=f, attr_volume=a, coords=c,
         attr_layout=data['attr_layout'], grid_size=data['grid_size'],
@@ -51,6 +53,12 @@ def run_export(input_path, output_path):
         decimation_target=data['decimation_target'],
         texture_size=data['texture_size'],
         remesh=True, use_tqdm=True,
+        # UV unwrap parameters (PozzettiAndrea/ComfyUI-TRELLIS2 nodes/nodes_unwrap.py:157-160)
+        # Defaults match cumesh.CuMesh.compute_charts() defaults
+        mesh_cluster_threshold_cone_half_angle_rad=np.radians(data.get('uv_cone_angle', 90.0)),
+        mesh_cluster_refine_iterations=data.get('uv_refine_iterations', 100),
+        mesh_cluster_global_iterations=data.get('uv_global_iterations', 3),
+        mesh_cluster_smooth_strength=data.get('uv_smooth_strength', 1),
     )
 
     # --- DER ROBUSTE FIX ---

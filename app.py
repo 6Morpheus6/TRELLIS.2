@@ -500,6 +500,10 @@ def extract_glb(
     state: dict,
     decimation_target: int,
     texture_size: int,
+    uv_cone_angle: float,
+    uv_refine_iterations: int,
+    uv_global_iterations: int,
+    uv_smooth_strength: int,
     req: gr.Request,
     progress=gr.Progress(track_tqdm=True),
 ) -> Tuple[str, str]:
@@ -534,7 +538,12 @@ def extract_glb(
         'attr_layout': pipeline.pbr_attr_layout, # Das ist nur eine Liste, kein Tensor
         'grid_size': res,
         'decimation_target': decimation_target,
-        'texture_size': texture_size
+        'texture_size': texture_size,
+        # UV unwrap parameters (PozzettiAndrea/ComfyUI-TRELLIS2 nodes/nodes_unwrap.py:157-160)
+        'uv_cone_angle': uv_cone_angle,
+        'uv_refine_iterations': uv_refine_iterations,
+        'uv_global_iterations': uv_global_iterations,
+        'uv_smooth_strength': uv_smooth_strength
     }
 
     # Aufräumen im Main Process BEVOR wir den Subprozess starten
@@ -631,7 +640,15 @@ with gr.Blocks(delete_cache=(600, 600), css=css, head=head) as demo:
                     tex_slat_guidance_strength = gr.Slider(1.0, 10.0, label="Guidance Strength", value=1.0, step=0.1)
                     tex_slat_guidance_rescale = gr.Slider(0.0, 1.0, label="Guidance Rescale", value=0.0, step=0.01)
                     tex_slat_sampling_steps = gr.Slider(1, 50, label="Sampling Steps", value=12, step=1)
-                    tex_slat_rescale_t = gr.Slider(1.0, 6.0, label="Rescale T", value=3.0, step=0.1)                
+                    tex_slat_rescale_t = gr.Slider(1.0, 6.0, label="Rescale T", value=3.0, step=0.1)
+                # UV Unwrap parameters based on PozzettiAndrea/ComfyUI-TRELLIS2 (nodes/nodes_unwrap.py:157-160)
+                # Defaults match cumesh.CuMesh.compute_charts() defaults
+                gr.Markdown("UV Unwrapping")
+                with gr.Row():
+                    uv_cone_angle = gr.Slider(0.0, 180.0, label="Chart Cone Angle", value=90.0, step=1.0)
+                    uv_refine_iterations = gr.Slider(0, 200, label="Refine Iterations", value=100, step=10)
+                    uv_global_iterations = gr.Slider(0, 10, label="Global Iterations", value=3, step=1)
+                    uv_smooth_strength = gr.Slider(0, 10, label="Smooth Strength", value=1, step=1)
 
         with gr.Column(scale=10):
             with gr.Walkthrough(selected=0) as walkthrough:
@@ -691,7 +708,7 @@ with gr.Blocks(delete_cache=(600, 600), css=css, head=head) as demo:
         lambda: gr.Walkthrough(selected=1), outputs=walkthrough
     ).then(
         extract_glb,
-        inputs=[output_buf, decimation_target, texture_size],
+        inputs=[output_buf, decimation_target, texture_size, uv_cone_angle, uv_refine_iterations, uv_global_iterations, uv_smooth_strength],
         outputs=[glb_output, download_btn],
     )
         
