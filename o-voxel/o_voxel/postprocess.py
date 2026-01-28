@@ -132,12 +132,18 @@ def to_glb(
     
     # --- Branch 1: Standard Pipeline (Simplification & Cleaning) ---
     if not remesh:
-        # Step 1: Aggressive simplification (3x target)
+        # Step 1: Unify face orientations before simplification to ensure clean input
+        # Based on PozzettiAndrea/ComfyUI-TRELLIS2 (nodes/nodes_unwrap.py:109-119)
+        mesh.unify_face_orientations()
+        if verbose:
+            print("Unified face orientations (pre-simplify)")
+
+        # Step 2: Aggressive simplification (3x target)
         mesh.simplify(decimation_target * 3, verbose=verbose)
         if verbose:
             print(f"After inital simplification: {mesh.num_vertices} vertices, {mesh.num_faces} faces")
         
-        # Step 2: Clean up topology (duplicates, non-manifolds, isolated parts)
+        # Step 3: Clean up topology (duplicates, non-manifolds, isolated parts)
         mesh.remove_duplicate_faces()
         mesh.repair_non_manifold_edges()
         mesh.remove_small_connected_components(1e-5)
@@ -145,12 +151,12 @@ def to_glb(
         if verbose:
             print(f"After initial cleanup: {mesh.num_vertices} vertices, {mesh.num_faces} faces")
             
-        # Step 3: Final simplification to target count
+        # Step 4: Final simplification to target count
         mesh.simplify(decimation_target, verbose=verbose)
         if verbose:
             print(f"After final simplification: {mesh.num_vertices} vertices, {mesh.num_faces} faces")
         
-        # Step 4: Final Cleanup loop
+        # Step 5: Final Cleanup loop
         mesh.remove_duplicate_faces()
         mesh.repair_non_manifold_edges()
         mesh.remove_small_connected_components(1e-5)
@@ -158,9 +164,10 @@ def to_glb(
         if verbose:
             print(f"After final cleanup: {mesh.num_vertices} vertices, {mesh.num_faces} faces")
             
-        # Step 5: Unify face orientations
+        # Step 6: Unify face orientations after simplification
         mesh.unify_face_orientations()
-    
+            print("Unified face orientations (post-simplify)")
+
     # --- Branch 2: Remeshing Pipeline ---
     else:
         center = aabb.mean(dim=0)
@@ -180,11 +187,23 @@ def to_glb(
         ))
         if verbose:
             print(f"After remeshing: {mesh.num_vertices} vertices, {mesh.num_faces} faces")
-        
-        # Simplify and clean the remeshed result (similar logic to above)
+
+        # Unify face orientations before simplification to ensure clean input
+        # Based on PozzettiAndrea/ComfyUI-TRELLIS2 (nodes/nodes_unwrap.py:109-119)
+        mesh.unify_face_orientations()
+        if verbose:
+            print("Unified face orientations (pre-simplify)")
+
+        # Simplify and clean the remeshed result
         mesh.simplify(decimation_target, verbose=verbose)
         if verbose:
             print(f"After simplifying: {mesh.num_vertices} vertices, {mesh.num_faces} faces")
+
+        # Unify face orientations after simplification (simplification can break it)
+        # Based on PozzettiAndrea/ComfyUI-TRELLIS2 (nodes/nodes_unwrap.py:109-119)
+        mesh.unify_face_orientations()
+        if verbose:
+            print("Unified face orientations (post-simplify)")
     
     if use_tqdm:
         pbar.update(1)
