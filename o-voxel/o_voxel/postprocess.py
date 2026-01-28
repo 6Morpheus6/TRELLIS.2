@@ -166,6 +166,7 @@ def to_glb(
             
         # Step 6: Unify face orientations after simplification
         mesh.unify_face_orientations()
+        if verbose:
             print("Unified face orientations (post-simplify)")
 
     # --- Branch 2: Remeshing Pipeline ---
