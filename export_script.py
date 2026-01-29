@@ -2,9 +2,19 @@ import os
 import sys
 import argparse
 import pickle
+import importlib.util
 import numpy as np
 import torch
 import o_voxel
+
+# Override postprocess module with local modified version
+# (installed package doesn't have fill_holes_perimeter and other enhancements)
+_local_postprocess_path = os.path.join(os.path.dirname(__file__), 'o-voxel', 'o_voxel', 'postprocess.py')
+_spec = importlib.util.spec_from_file_location("o_voxel.postprocess", _local_postprocess_path)
+_local_postprocess = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_local_postprocess)
+o_voxel.postprocess = _local_postprocess
+
 import trimesh
 from pygltflib import GLTF2
 
@@ -59,6 +69,9 @@ def run_export(input_path, output_path):
         mesh_cluster_refine_iterations=data.get('uv_refine_iterations', 100),
         mesh_cluster_global_iterations=data.get('uv_global_iterations', 3),
         mesh_cluster_smooth_strength=data.get('uv_smooth_strength', 1),
+        # Mesh processing parameters (PozzettiAndrea/ComfyUI-TRELLIS2 nodes/nodes_unwrap.py:27-30)
+        fill_holes_perimeter=data.get('fill_holes_perimeter', 0.03),
+        remesh_band=data.get('remesh_band', 1.0),
     )
 
     # --- DER ROBUSTE FIX ---

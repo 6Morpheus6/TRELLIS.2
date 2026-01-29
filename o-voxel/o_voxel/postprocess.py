@@ -29,6 +29,7 @@ def to_glb(
     mesh_cluster_refine_iterations=0,
     mesh_cluster_global_iterations=1,
     mesh_cluster_smooth_strength=1,
+    fill_holes_perimeter: float = 0.03,
     verbose: bool = False,
     use_tqdm: bool = False,
 ):
@@ -54,6 +55,7 @@ def to_glb(
         mesh_cluster_refine_iterations: number of iterations for refining clusters in uv unwrapping
         mesh_cluster_global_iterations: number of global iterations for clustering in uv unwrapping
         mesh_cluster_smooth_strength: strength of smoothing for clustering in uv unwrapping
+        fill_holes_perimeter: maximum perimeter of holes to fill (larger values fill bigger holes)
         verbose: whether to print verbose messages
         use_tqdm: whether to use tqdm to display progress bar
     """
@@ -107,7 +109,7 @@ def to_glb(
     
     # --- Initial Mesh Cleaning ---
     # Fills holes as much as we can before processing
-    mesh.fill_holes(max_hole_perimeter=3e-2)
+    mesh.fill_holes(max_hole_perimeter=fill_holes_perimeter)
     if verbose:
         print(f"After filling holes: {mesh.num_vertices} vertices, {mesh.num_faces} faces")
     vertices, faces = mesh.read()
@@ -147,7 +149,7 @@ def to_glb(
         mesh.remove_duplicate_faces()
         mesh.repair_non_manifold_edges()
         mesh.remove_small_connected_components(1e-5)
-        mesh.fill_holes(max_hole_perimeter=3e-2)
+        mesh.fill_holes(max_hole_perimeter=fill_holes_perimeter)
         if verbose:
             print(f"After initial cleanup: {mesh.num_vertices} vertices, {mesh.num_faces} faces")
             
@@ -160,7 +162,7 @@ def to_glb(
         mesh.remove_duplicate_faces()
         mesh.repair_non_manifold_edges()
         mesh.remove_small_connected_components(1e-5)
-        mesh.fill_holes(max_hole_perimeter=3e-2)
+        mesh.fill_holes(max_hole_perimeter=fill_holes_perimeter)
         if verbose:
             print(f"After final cleanup: {mesh.num_vertices} vertices, {mesh.num_faces} faces")
             

@@ -326,6 +326,14 @@ def preprocess_image(image: Image.Image) -> Image.Image:
     Returns:
         Image.Image: The preprocessed image.
     """
+    if image is None:
+        raise gr.Error("No image provided")
+    # Convert numpy array to PIL Image if needed
+    if not isinstance(image, Image.Image):
+        if isinstance(image, np.ndarray):
+            image = Image.fromarray(image)
+        else:
+            raise gr.Error(f"Invalid image type: {type(image)}")
     processed_image = pipeline.preprocess_image(image)
     return processed_image
 
@@ -375,6 +383,16 @@ def image_to_3d(
     req: gr.Request,
     progress=gr.Progress(track_tqdm=True),
 ) -> Tuple[dict, str, list]:
+    # Validate image input
+    if image is None:
+        raise gr.Error("Please upload an image first")
+    if not isinstance(image, Image.Image):
+        # Try to convert numpy array to PIL Image
+        if isinstance(image, np.ndarray):
+            image = Image.fromarray(image)
+        else:
+            raise gr.Error(f"Invalid image type: {type(image)}. Expected PIL Image.")
+
     # --- Sampling ---
     outputs, latents = pipeline.run(
         image,
@@ -504,6 +522,8 @@ def extract_glb(
     uv_refine_iterations: int,
     uv_global_iterations: int,
     uv_smooth_strength: int,
+    fill_holes_perimeter: float,
+    remesh_band: float,
     req: gr.Request,
     progress=gr.Progress(track_tqdm=True),
 ) -> Tuple[str, str]:
@@ -543,7 +563,10 @@ def extract_glb(
         'uv_cone_angle': uv_cone_angle,
         'uv_refine_iterations': uv_refine_iterations,
         'uv_global_iterations': uv_global_iterations,
-        'uv_smooth_strength': uv_smooth_strength
+        'uv_smooth_strength': uv_smooth_strength,
+        # Mesh processing parameters (PozzettiAndrea/ComfyUI-TRELLIS2 nodes/nodes_unwrap.py:27-30)
+        'fill_holes_perimeter': fill_holes_perimeter,
+        'remesh_band': remesh_band
     }
 
     # Aufräumen im Main Process BEVOR wir den Subprozess starten
@@ -612,7 +635,7 @@ with gr.Blocks(delete_cache=(600, 600), css=css, head=head) as demo:
                     return gr.update(
                         value='<div style="background: #4a3000; border: 1px solid #856404; border-radius: 4px; padding: 8px; margin-top: 4px;">'
                               '<span style="color: #ffc107;">&#9888;</span> '
-                              '<span style="color: #ffeaa7;"><b>High VRAM Warning:</b> Texture sizes above might require 24GB+ VRAM. '
+                              '<span style="color: #ffeaa7;"><b>High VRAM Warning:</b> Texture sizes above 4096 might require 24GB+ VRAM. '
                               'Besides, .GLB file sizes increase from ~20mb (4096) to +120mb (on 8192!).</span></div>',
                         visible=True
                     )
@@ -644,11 +667,14 @@ with gr.Blocks(delete_cache=(600, 600), css=css, head=head) as demo:
                 # UV Unwrap parameters based on PozzettiAndrea/ComfyUI-TRELLIS2 (nodes/nodes_unwrap.py:157-160)
                 # Defaults match cumesh.CuMesh.compute_charts() defaults
                 gr.Markdown("UV Unwrapping")
-                with gr.Row():
-                    uv_cone_angle = gr.Slider(0.0, 180.0, label="Chart Cone Angle", value=90.0, step=1.0)
-                    uv_refine_iterations = gr.Slider(0, 200, label="Refine Iterations", value=100, step=10)
-                    uv_global_iterations = gr.Slider(0, 10, label="Global Iterations", value=3, step=1)
-                    uv_smooth_strength = gr.Slider(0, 10, label="Smooth Strength", value=1, step=1)
+                uv_cone_angle = gr.Slider(0.0, 180.0, label="Chart Cone Angle", value=90.0, step=1.0)
+                uv_refine_iterations = gr.Slider(0, 200, label="Refine Iterations", value=100, step=10)
+                uv_global_iterations = gr.Slider(0, 10, label="Global Iterations", value=3, step=1)
+                uv_smooth_strength = gr.Slider(0, 10, label="Smooth Strength", value=1, step=1)
+                # Mesh processing parameters (PozzettiAndrea/ComfyUI-TRELLIS2 nodes/nodes_unwrap.py:27-30)
+                gr.Markdown("Mesh Processing")
+                fill_holes_perimeter = gr.Slider(0.001, 0.5, label="Fill Holes Perimeter", value=0.03, step=0.001)
+                remesh_band = gr.Slider(0.1, 5.0, label="Remesh Band", value=1.0, step=0.1)
 
         with gr.Column(scale=10):
             with gr.Walkthrough(selected=0) as walkthrough:
@@ -708,7 +734,7 @@ with gr.Blocks(delete_cache=(600, 600), css=css, head=head) as demo:
         lambda: gr.Walkthrough(selected=1), outputs=walkthrough
     ).then(
         extract_glb,
-        inputs=[output_buf, decimation_target, texture_size, uv_cone_angle, uv_refine_iterations, uv_global_iterations, uv_smooth_strength],
+        inputs=[output_buf, decimation_target, texture_size, uv_cone_angle, uv_refine_iterations, uv_global_iterations, uv_smooth_strength, fill_holes_perimeter, remesh_band],
         outputs=[glb_output, download_btn],
     )
         

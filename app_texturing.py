@@ -113,7 +113,7 @@ with gr.Blocks(delete_cache=(600, 600)) as demo:
                     return gr.update(
                         value='<div style="background: #4a3000; border: 1px solid #856404; border-radius: 4px; padding: 8px; margin-top: 4px;">'
                               '<span style="color: #ffc107;">&#9888;</span> '
-                              '<span style="color: #ffeaa7;"><b>High VRAM Warning:</b> Texture sizes above might require 24GB+ VRAM. '
+                              '<span style="color: #ffeaa7;"><b>High VRAM Warning:</b> Texture sizes above 4096 might require 24GB+ VRAM. '
                               'Besides, .GLB file sizes increase from ~20mb (4096) to +120mb (on 8192!).</span></div>',
                         visible=True
                     )
