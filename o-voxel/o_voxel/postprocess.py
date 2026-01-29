@@ -9,6 +9,57 @@ import trimesh.visual
 from flex_gemm.ops.grid_sample import grid_sample_3d
 import nvdiffrast.torch as dr
 import cumesh
+# Mesh cleanup imports (visualbruno/ComfyUI-Trellis2 nodes.py:18, 136-191)
+import pymeshlab
+
+
+def _pymeshlab_remove_floater(mesh_set: pymeshlab.MeshSet) -> pymeshlab.MeshSet:
+    """
+    Remove small disconnected components from a mesh using pymeshlab.
+    Based on visualbruno/ComfyUI-Trellis2 nodes.py:186-191
+    """
+    mesh_set.apply_filter("compute_selection_by_small_disconnected_components_per_face",
+                          nbfaceratio=0.005)
+    mesh_set.apply_filter("compute_selection_transfer_face_to_vertex", inclusive=False)
+    mesh_set.apply_filter("meshing_remove_selected_vertices_and_faces")
+    return mesh_set
+
+
+def _remove_floaters(vertices: torch.Tensor, faces: torch.Tensor, verbose: bool = False) -> tuple:
+    """
+    Remove floating/disconnected mesh parts using pymeshlab.
+    Based on visualbruno/ComfyUI-Trellis2 nodes.py:136-155
+
+    Args:
+        vertices: (N, 3) tensor of vertex positions
+        faces: (M, 3) tensor of face indices
+        verbose: whether to print progress
+
+    Returns:
+        tuple: (new_vertices, new_faces) as torch tensors
+    """
+    if verbose:
+        print(f"Removing floaters... Current faces: {len(faces)}")
+
+    vertices_np = vertices.cpu().numpy()
+    faces_np = faces.cpu().numpy()
+
+    mesh_set = pymeshlab.MeshSet()
+    mesh_pymeshlab = pymeshlab.Mesh(vertex_matrix=vertices_np, face_matrix=faces_np)
+    mesh_set.add_mesh(mesh_pymeshlab, "converted_mesh")
+    mesh_set = _pymeshlab_remove_floater(mesh_set)
+
+    mesh_pymeshlab = mesh_set.current_mesh()
+    new_faces = mesh_pymeshlab.face_matrix()
+    new_vertices = mesh_pymeshlab.vertex_matrix()
+
+    if verbose:
+        print(f"After removing floaters: {len(new_faces)} faces")
+
+    return (
+        torch.from_numpy(new_vertices).float().cuda().contiguous(),
+        torch.from_numpy(new_faces).int().cuda().contiguous()
+    )
 
 
 def to_glb(
@@ -30,6 +81,12 @@ def to_glb(
     mesh_cluster_global_iterations=1,
     mesh_cluster_smooth_strength=1,
     fill_holes_perimeter: float = 0.03,
+    # Mesh cleanup options (visualbruno/ComfyUI-Trellis2 nodes.py:682-688, 136-191)
+    remove_floaters: bool = True,
+    remove_duplicate_faces: bool = True,
+    repair_non_manifold_edges: bool = True,
+    remove_small_components: bool = True,
+    small_component_threshold: float = 1e-5,
     verbose: bool = False,
     use_tqdm: bool = False,
 ):
@@ -56,6 +113,11 @@ def to_glb(
         mesh_cluster_global_iterations: number of global iterations for clustering in uv unwrapping
         mesh_cluster_smooth_strength: strength of smoothing for clustering in uv unwrapping
         fill_holes_perimeter: maximum perimeter of holes to fill (larger values fill bigger holes)
+        remove_floaters: whether to remove small disconnected mesh components (visualbruno/ComfyUI-Trellis2)
+        remove_duplicate_faces: whether to remove duplicate/overlapping faces (visualbruno/ComfyUI-Trellis2)
+        repair_non_manifold_edges: whether to repair non-manifold edge topology (visualbruno/ComfyUI-Trellis2)
+        remove_small_components: whether to remove small connected components (visualbruno/ComfyUI-Trellis2)
+        small_component_threshold: size threshold for small component removal (relative to mesh size) (visualbruno/ComfyUI-Trellis2)
         verbose: whether to print verbose messages
         use_tqdm: whether to use tqdm to display progress bar
     """
@@ -113,9 +175,16 @@ def to_glb(
     if verbose:
         print(f"After filling holes: {mesh.num_vertices} vertices, {mesh.num_faces} faces")
     vertices, faces = mesh.read()
+
+    # Remove floaters (small disconnected components) using pymeshlab
+    # Based on visualbruno/ComfyUI-Trellis2 nodes.py:136-155, 682-688
+    if remove_floaters:
+        vertices, faces = _remove_floaters(vertices, faces, verbose=verbose)
+        mesh.init(vertices, faces)
+
     if use_tqdm:
         pbar.update(1)
-        
+
     # Build BVH for the current mesh to guide remeshing
     if use_tqdm:
         pbar.set_description("Building BVH")
@@ -146,22 +215,30 @@ def to_glb(
             print(f"After inital simplification: {mesh.num_vertices} vertices, {mesh.num_faces} faces")
         
         # Step 3: Clean up topology (duplicates, non-manifolds, isolated parts)
-        mesh.remove_duplicate_faces()
-        mesh.repair_non_manifold_edges()
-        mesh.remove_small_connected_components(1e-5)
+        # Conditional cleanup based on user options (visualbruno/ComfyUI-Trellis2 nodes.py:682-688)
+        if remove_duplicate_faces:
+            mesh.remove_duplicate_faces()
+        if repair_non_manifold_edges:
+            mesh.repair_non_manifold_edges()
+        if remove_small_components:
+            mesh.remove_small_connected_components(small_component_threshold)
         mesh.fill_holes(max_hole_perimeter=fill_holes_perimeter)
         if verbose:
             print(f"After initial cleanup: {mesh.num_vertices} vertices, {mesh.num_faces} faces")
-            
+
         # Step 4: Final simplification to target count
         mesh.simplify(decimation_target, verbose=verbose)
         if verbose:
             print(f"After final simplification: {mesh.num_vertices} vertices, {mesh.num_faces} faces")
-        
+
         # Step 5: Final Cleanup loop
-        mesh.remove_duplicate_faces()
-        mesh.repair_non_manifold_edges()
-        mesh.remove_small_connected_components(1e-5)
+        # Conditional cleanup based on user options (visualbruno/ComfyUI-Trellis2 nodes.py:682-688)
+        if remove_duplicate_faces:
+            mesh.remove_duplicate_faces()
+        if repair_non_manifold_edges:
+            mesh.repair_non_manifold_edges()
+        if remove_small_components:
+            mesh.remove_small_connected_components(small_component_threshold)
         mesh.fill_holes(max_hole_perimeter=fill_holes_perimeter)
         if verbose:
             print(f"After final cleanup: {mesh.num_vertices} vertices, {mesh.num_faces} faces")
@@ -201,6 +278,17 @@ def to_glb(
         mesh.simplify(decimation_target, verbose=verbose)
         if verbose:
             print(f"After simplifying: {mesh.num_vertices} vertices, {mesh.num_faces} faces")
+
+        # Cleanup after simplification
+        if remove_duplicate_faces:
+            mesh.remove_duplicate_faces()
+        if repair_non_manifold_edges:
+            mesh.repair_non_manifold_edges()
+        if remove_small_components:
+            mesh.remove_small_connected_components(small_component_threshold)
+        mesh.fill_holes(max_hole_perimeter=fill_holes_perimeter)
+        if verbose:
+            print(f"After cleanup: {mesh.num_vertices} vertices, {mesh.num_faces} faces")
 
         # Unify face orientations after simplification (simplification can break it)
         # Based on PozzettiAndrea/ComfyUI-TRELLIS2 (nodes/nodes_unwrap.py:109-119)

@@ -56,6 +56,7 @@ def run_export(input_path, output_path):
 
     print("[Subprocess] Running o_voxel postprocessing...")
     print(f"[Subprocess] UV params: cone_angle={data.get('uv_cone_angle', 90.0)}, refine={data.get('uv_refine_iterations', 0)}, global={data.get('uv_global_iterations', 1)}, smooth={data.get('uv_smooth_strength', 1)}")
+    print(f"[Subprocess] Mesh cleanup: floaters={data.get('remove_floaters', True)}, duplicates={data.get('remove_duplicate_faces', True)}, non-manifold={data.get('repair_non_manifold_edges', True)}, small_components={data.get('remove_small_components', True)}")
     glb = o_voxel.postprocess.to_glb(
         vertices=v, faces=f, attr_volume=a, coords=c,
         attr_layout=data['attr_layout'], grid_size=data['grid_size'],
@@ -72,6 +73,12 @@ def run_export(input_path, output_path):
         # Mesh processing parameters (PozzettiAndrea/ComfyUI-TRELLIS2 nodes/nodes_unwrap.py:27-30)
         fill_holes_perimeter=data.get('fill_holes_perimeter', 0.03),
         remesh_band=data.get('remesh_band', 1.0),
+        # Mesh cleanup options (visualbruno/ComfyUI-Trellis2 nodes.py:682-688, 136-191)
+        remove_floaters=data.get('remove_floaters', True),
+        remove_duplicate_faces=data.get('remove_duplicate_faces', True),
+        repair_non_manifold_edges=data.get('repair_non_manifold_edges', True),
+        remove_small_components=data.get('remove_small_components', True),
+        small_component_threshold=data.get('small_component_threshold', 1e-5),
     )
 
     # --- DER ROBUSTE FIX ---

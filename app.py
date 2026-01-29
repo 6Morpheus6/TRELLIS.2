@@ -524,6 +524,12 @@ def extract_glb(
     uv_smooth_strength: int,
     fill_holes_perimeter: float,
     remesh_band: float,
+    # Mesh cleanup options (visualbruno/ComfyUI-Trellis2 nodes.py:682-688, 136-191)
+    remove_floaters: bool,
+    remove_duplicate_faces: bool,
+    repair_non_manifold_edges: bool,
+    remove_small_components: bool,
+    small_component_threshold: float,
     req: gr.Request,
     progress=gr.Progress(track_tqdm=True),
 ) -> Tuple[str, str]:
@@ -566,7 +572,13 @@ def extract_glb(
         'uv_smooth_strength': uv_smooth_strength,
         # Mesh processing parameters (PozzettiAndrea/ComfyUI-TRELLIS2 nodes/nodes_unwrap.py:27-30)
         'fill_holes_perimeter': fill_holes_perimeter,
-        'remesh_band': remesh_band
+        'remesh_band': remesh_band,
+        # Mesh cleanup options (visualbruno/ComfyUI-Trellis2 nodes.py:682-688, 136-191)
+        'remove_floaters': remove_floaters,
+        'remove_duplicate_faces': remove_duplicate_faces,
+        'repair_non_manifold_edges': repair_non_manifold_edges,
+        'remove_small_components': remove_small_components,
+        'small_component_threshold': small_component_threshold,
     }
 
     # Aufräumen im Main Process BEVOR wir den Subprozess starten
@@ -675,6 +687,12 @@ with gr.Blocks(delete_cache=(600, 600), css=css, head=head) as demo:
                 gr.Markdown("Mesh Processing")
                 fill_holes_perimeter = gr.Slider(0.001, 0.5, label="Fill Holes Perimeter", value=0.03, step=0.001)
                 remesh_band = gr.Slider(0.1, 5.0, label="Remesh Band", value=1.0, step=0.1)
+                # Mesh cleanup options (visualbruno/ComfyUI-Trellis2 nodes.py:682-688, 136-191)
+                remove_floaters = gr.Checkbox(label="Remove Floaters", value=True)
+                remove_duplicate_faces = gr.Checkbox(label="Remove Duplicate Faces", value=True)
+                repair_non_manifold_edges = gr.Checkbox(label="Repair Non-Manifold Edges", value=True)
+                remove_small_components = gr.Checkbox(label="Remove Small Connected Components", value=True)
+                small_component_threshold = gr.Slider(0.00001, 0.01, label="Small Component Threshold", value=0.00001, step=0.00001)
 
         with gr.Column(scale=10):
             with gr.Walkthrough(selected=0) as walkthrough:
@@ -734,7 +752,7 @@ with gr.Blocks(delete_cache=(600, 600), css=css, head=head) as demo:
         lambda: gr.Walkthrough(selected=1), outputs=walkthrough
     ).then(
         extract_glb,
-        inputs=[output_buf, decimation_target, texture_size, uv_cone_angle, uv_refine_iterations, uv_global_iterations, uv_smooth_strength, fill_holes_perimeter, remesh_band],
+        inputs=[output_buf, decimation_target, texture_size, uv_cone_angle, uv_refine_iterations, uv_global_iterations, uv_smooth_strength, fill_holes_perimeter, remesh_band, remove_floaters, remove_duplicate_faces, repair_non_manifold_edges, remove_small_components, small_component_threshold],
         outputs=[glb_output, download_btn],
     )
         
