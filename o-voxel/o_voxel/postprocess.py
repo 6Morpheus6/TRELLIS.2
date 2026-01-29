@@ -62,6 +62,38 @@ def _remove_floaters(vertices: torch.Tensor, faces: torch.Tensor, verbose: bool 
     )
 
 
+# Batched BVH queries to prevent GPU kernel timeout on high-resolution textures (8K+)
+# (visualbruno/ComfyUI-Trellis2 nodes.py:193-229)
+def _batched_unsigned_distance(bvh, positions, batch_size=100000, return_uvw=False):
+    """
+    Batch unsigned_distance queries to avoid GPU kernel timeout on large meshes.
+    When processing high-resolution textures (e.g., 4096x4096 = ~16M pixels) on complex
+    meshes, a single BVH query can cause GPU watchdog timeout. This function splits
+    the query into smaller batches.
+    """
+    N = positions.shape[0]
+    if N <= batch_size:
+        return bvh.unsigned_distance(positions, return_uvw=return_uvw)
+
+    distances_list = []
+    face_id_list = []
+    uvw_list = [] if return_uvw else None
+
+    for i in range(0, N, batch_size):
+        end = min(i + batch_size, N)
+        d, f, u = bvh.unsigned_distance(positions[i:end], return_uvw=return_uvw)
+        distances_list.append(d)
+        face_id_list.append(f)
+        if return_uvw:
+            uvw_list.append(u)
+
+    return (
+        torch.cat(distances_list),
+        torch.cat(face_id_list),
+        torch.cat(uvw_list) if return_uvw else None
+    )
+
+
 def to_glb(
     vertices: torch.Tensor,
     faces: torch.Tensor,
@@ -354,17 +386,25 @@ def to_glb(
     
     # Mask of valid pixels in texture
     mask = rast[0, ..., 3] > 0
-    
+
     # Interpolate 3D positions in UV space (finding 3D coord for every texel)
     pos = dr.interpolate(out_vertices.unsqueeze(0), rast, out_faces)[0][0]
+    del rast  # Free ~1GB for 8K texture
     valid_pos = pos[mask]
-    
+    del pos
+
     # Map these positions back to the *original* high-res mesh to get accurate attributes
     # This corrects geometric errors introduced by simplification/remeshing
-    _, face_id, uvw = bvh.unsigned_distance(valid_pos, return_uvw=True)
+    # Using batched queries to prevent GPU timeout on high-res textures (visualbruno/ComfyUI-Trellis2 nodes.py:193-229)
+    _, face_id, uvw = _batched_unsigned_distance(bvh, valid_pos, return_uvw=True)
     orig_tri_verts = vertices[faces[face_id.long()]] # (N_new, 3, 3)
+    del face_id
     valid_pos = (orig_tri_verts * uvw.unsqueeze(-1)).sum(dim=1)
-    
+    del orig_tri_verts, uvw
+
+    # Release memory before expensive grid_sample_3d operation
+    torch.cuda.empty_cache()
+
     # Trilinear sampling from the attribute volume (Color, Material props)
     attrs = torch.zeros(texture_size, texture_size, attr_volume.shape[1], device='cuda')
     attrs[mask] = grid_sample_3d(
@@ -374,6 +414,7 @@ def to_glb(
         grid=((valid_pos - aabb[0]) / voxel_size).reshape(1, -1, 3),
         mode='trilinear',
     )
+    del valid_pos
     if use_tqdm:
         pbar.update(1)
     if verbose:
