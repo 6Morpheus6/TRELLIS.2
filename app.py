@@ -398,23 +398,28 @@ def image_to_3d(
         image,
         seed=seed,
         preprocess_image=False,
+        # guidance_interval from visualbruno/ComfyUI-Trellis2 nodes.py:1129-1134,1172-1178
+        # Starts CFG earlier (0.3) vs Microsoft default (0.6) for stronger image adherence
         sparse_structure_sampler_params={
             "steps": ss_sampling_steps,
             "guidance_strength": ss_guidance_strength,
             "guidance_rescale": ss_guidance_rescale,
             "rescale_t": ss_rescale_t,
+            "guidance_interval": [0.3, 1.0],  # visualbruno/ComfyUI-Trellis2
         },
         shape_slat_sampler_params={
             "steps": shape_slat_sampling_steps,
             "guidance_strength": shape_slat_guidance_strength,
             "guidance_rescale": shape_slat_guidance_rescale,
             "rescale_t": shape_slat_rescale_t,
+            "guidance_interval": [0.3, 1.0],  # visualbruno/ComfyUI-Trellis2
         },
         tex_slat_sampler_params={
             "steps": tex_slat_sampling_steps,
             "guidance_strength": tex_slat_guidance_strength,
             "guidance_rescale": tex_slat_guidance_rescale,
             "rescale_t": tex_slat_rescale_t,
+            "guidance_interval": [0.6, 0.9],
         },
         pipeline_type={
             "512": "512",
