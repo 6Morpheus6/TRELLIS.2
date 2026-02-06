@@ -326,6 +326,14 @@ def preprocess_image(image: Image.Image) -> Image.Image:
     Returns:
         Image.Image: The preprocessed image.
     """
+    if image is None:
+        raise gr.Error("No image provided")
+    # Convert numpy array to PIL Image if needed
+    if not isinstance(image, Image.Image):
+        if isinstance(image, np.ndarray):
+            image = Image.fromarray(image)
+        else:
+            raise gr.Error(f"Invalid image type: {type(image)}")
     processed_image = pipeline.preprocess_image(image)
     return processed_image
 
@@ -375,28 +383,43 @@ def image_to_3d(
     req: gr.Request,
     progress=gr.Progress(track_tqdm=True),
 ) -> Tuple[dict, str, list]:
+    # Validate image input
+    if image is None:
+        raise gr.Error("Please upload an image first")
+    if not isinstance(image, Image.Image):
+        # Try to convert numpy array to PIL Image
+        if isinstance(image, np.ndarray):
+            image = Image.fromarray(image)
+        else:
+            raise gr.Error(f"Invalid image type: {type(image)}. Expected PIL Image.")
+
     # --- Sampling ---
     outputs, latents = pipeline.run(
         image,
         seed=seed,
         preprocess_image=False,
+        # guidance_interval from visualbruno/ComfyUI-Trellis2 nodes.py:1129-1134,1172-1178
+        # Starts CFG earlier (0.3) vs Microsoft default (0.6) for stronger image adherence
         sparse_structure_sampler_params={
             "steps": ss_sampling_steps,
             "guidance_strength": ss_guidance_strength,
             "guidance_rescale": ss_guidance_rescale,
             "rescale_t": ss_rescale_t,
+            "guidance_interval": [0.3, 1.0],  # visualbruno/ComfyUI-Trellis2
         },
         shape_slat_sampler_params={
             "steps": shape_slat_sampling_steps,
             "guidance_strength": shape_slat_guidance_strength,
             "guidance_rescale": shape_slat_guidance_rescale,
             "rescale_t": shape_slat_rescale_t,
+            "guidance_interval": [0.3, 1.0],  # visualbruno/ComfyUI-Trellis2
         },
         tex_slat_sampler_params={
             "steps": tex_slat_sampling_steps,
             "guidance_strength": tex_slat_guidance_strength,
             "guidance_rescale": tex_slat_guidance_rescale,
             "rescale_t": tex_slat_rescale_t,
+            "guidance_interval": [0.6, 0.9],
         },
         pipeline_type={
             "512": "512",
@@ -500,6 +523,18 @@ def extract_glb(
     state: dict,
     decimation_target: int,
     texture_size: int,
+    uv_cone_angle: float,
+    uv_refine_iterations: int,
+    uv_global_iterations: int,
+    uv_smooth_strength: int,
+    fill_holes_perimeter: float,
+    remesh_band: float,
+    # Mesh cleanup options (visualbruno/ComfyUI-Trellis2 nodes.py:682-688, 136-191)
+    remove_floaters: bool,
+    remove_duplicate_faces: bool,
+    repair_non_manifold_edges: bool,
+    remove_small_components: bool,
+    small_component_threshold: float,
     req: gr.Request,
     progress=gr.Progress(track_tqdm=True),
 ) -> Tuple[str, str]:
@@ -534,7 +569,21 @@ def extract_glb(
         'attr_layout': pipeline.pbr_attr_layout, # Das ist nur eine Liste, kein Tensor
         'grid_size': res,
         'decimation_target': decimation_target,
-        'texture_size': texture_size
+        'texture_size': texture_size,
+        # UV unwrap parameters (PozzettiAndrea/ComfyUI-TRELLIS2 nodes/nodes_unwrap.py:157-160)
+        'uv_cone_angle': uv_cone_angle,
+        'uv_refine_iterations': uv_refine_iterations,
+        'uv_global_iterations': uv_global_iterations,
+        'uv_smooth_strength': uv_smooth_strength,
+        # Mesh processing parameters (PozzettiAndrea/ComfyUI-TRELLIS2 nodes/nodes_unwrap.py:27-30)
+        'fill_holes_perimeter': fill_holes_perimeter,
+        'remesh_band': remesh_band,
+        # Mesh cleanup options (visualbruno/ComfyUI-Trellis2 nodes.py:682-688, 136-191)
+        'remove_floaters': remove_floaters,
+        'remove_duplicate_faces': remove_duplicate_faces,
+        'repair_non_manifold_edges': repair_non_manifold_edges,
+        'remove_small_components': remove_small_components,
+        'small_component_threshold': small_component_threshold,
     }
 
     # Aufräumen im Main Process BEVOR wir den Subprozess starten
@@ -591,8 +640,26 @@ with gr.Blocks(delete_cache=(600, 600), css=css, head=head) as demo:
             seed = gr.Slider(0, MAX_SEED, label="Seed", value=0, step=1)
             randomize_seed = gr.Checkbox(label="Randomize Seed", value=True)
             decimation_target = gr.Slider(100000, 1000000, label="Decimation Target", value=500000, step=10000)
-            texture_size = gr.Slider(1024, 4096, label="Texture Size", value=2048, step=1024)
-            
+            # Texture size range 512-16384 based on PozzettiAndrea/ComfyUI-TRELLIS2 (nodes/nodes_unwrap.py:266)
+            texture_size = gr.Slider(512, 16384, label="Texture Size", value=2048, step=512)
+            texture_size_warning = gr.HTML(
+                value="",
+                visible=False
+            )
+
+            def update_texture_warning(size):
+                if size > 4096:
+                    return gr.update(
+                        value='<div style="background: #4a3000; border: 1px solid #856404; border-radius: 4px; padding: 8px; margin-top: 4px;">'
+                              '<span style="color: #ffc107;">&#9888;</span> '
+                              '<span style="color: #ffeaa7;"><b>High VRAM Warning:</b> Texture sizes above 4096 might require 24GB+ VRAM. '
+                              'Besides, .GLB file sizes increase from ~20mb (4096) to +120mb (on 8192!).</span></div>',
+                        visible=True
+                    )
+                return gr.update(value="", visible=False)
+
+            texture_size.change(fn=update_texture_warning, inputs=[texture_size], outputs=[texture_size_warning])
+
             generate_btn = gr.Button("Generate")
                 
             with gr.Accordion(label="Advanced Settings", open=False):                
@@ -613,7 +680,24 @@ with gr.Blocks(delete_cache=(600, 600), css=css, head=head) as demo:
                     tex_slat_guidance_strength = gr.Slider(1.0, 10.0, label="Guidance Strength", value=1.0, step=0.1)
                     tex_slat_guidance_rescale = gr.Slider(0.0, 1.0, label="Guidance Rescale", value=0.0, step=0.01)
                     tex_slat_sampling_steps = gr.Slider(1, 50, label="Sampling Steps", value=12, step=1)
-                    tex_slat_rescale_t = gr.Slider(1.0, 6.0, label="Rescale T", value=3.0, step=0.1)                
+                    tex_slat_rescale_t = gr.Slider(1.0, 6.0, label="Rescale T", value=3.0, step=0.1)
+                # UV Unwrap parameters based on PozzettiAndrea/ComfyUI-TRELLIS2 (nodes/nodes_unwrap.py:157-160)
+                # Defaults match cumesh.CuMesh.compute_charts() defaults
+                gr.Markdown("UV Unwrapping")
+                uv_cone_angle = gr.Slider(0.0, 180.0, label="Chart Cone Angle", value=90.0, step=1.0)
+                uv_refine_iterations = gr.Slider(0, 200, label="Refine Iterations", value=100, step=10)
+                uv_global_iterations = gr.Slider(0, 10, label="Global Iterations", value=3, step=1)
+                uv_smooth_strength = gr.Slider(0, 10, label="Smooth Strength", value=1, step=1)
+                # Mesh processing parameters (PozzettiAndrea/ComfyUI-TRELLIS2 nodes/nodes_unwrap.py:27-30)
+                gr.Markdown("Mesh Processing")
+                fill_holes_perimeter = gr.Slider(0.001, 0.5, label="Fill Holes Perimeter", value=0.03, step=0.001)
+                remesh_band = gr.Slider(0.1, 5.0, label="Remesh Band", value=1.0, step=0.1)
+                # Mesh cleanup options (visualbruno/ComfyUI-Trellis2 nodes.py:682-688, 136-191)
+                remove_floaters = gr.Checkbox(label="Remove Floaters", value=True)
+                remove_duplicate_faces = gr.Checkbox(label="Remove Duplicate Faces", value=True)
+                repair_non_manifold_edges = gr.Checkbox(label="Repair Non-Manifold Edges", value=True)
+                remove_small_components = gr.Checkbox(label="Remove Small Connected Components", value=True)
+                small_component_threshold = gr.Slider(0.00001, 0.01, label="Small Component Threshold", value=0.00001, step=0.00001)
 
         with gr.Column(scale=10):
             with gr.Walkthrough(selected=0) as walkthrough:
@@ -673,7 +757,7 @@ with gr.Blocks(delete_cache=(600, 600), css=css, head=head) as demo:
         lambda: gr.Walkthrough(selected=1), outputs=walkthrough
     ).then(
         extract_glb,
-        inputs=[output_buf, decimation_target, texture_size],
+        inputs=[output_buf, decimation_target, texture_size, uv_cone_angle, uv_refine_iterations, uv_global_iterations, uv_smooth_strength, fill_holes_perimeter, remesh_band, remove_floaters, remove_duplicate_faces, repair_non_manifold_edges, remove_small_components, small_component_threshold],
         outputs=[glb_output, download_btn],
     )
         

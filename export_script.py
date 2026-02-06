@@ -2,8 +2,19 @@ import os
 import sys
 import argparse
 import pickle
+import importlib.util
+import numpy as np
 import torch
 import o_voxel
+
+# Override postprocess module with local modified version
+# (installed package doesn't have fill_holes_perimeter and other enhancements)
+_local_postprocess_path = os.path.join(os.path.dirname(__file__), 'o-voxel', 'o_voxel', 'postprocess.py')
+_spec = importlib.util.spec_from_file_location("o_voxel.postprocess", _local_postprocess_path)
+_local_postprocess = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_local_postprocess)
+o_voxel.postprocess = _local_postprocess
+
 import trimesh
 from pygltflib import GLTF2
 
@@ -44,6 +55,8 @@ def run_export(input_path, output_path):
     c = torch.from_numpy(data['coords']).cuda().float()
 
     print("[Subprocess] Running o_voxel postprocessing...")
+    print(f"[Subprocess] UV params: cone_angle={data.get('uv_cone_angle', 90.0)}, refine={data.get('uv_refine_iterations', 0)}, global={data.get('uv_global_iterations', 1)}, smooth={data.get('uv_smooth_strength', 1)}")
+    print(f"[Subprocess] Mesh cleanup: floaters={data.get('remove_floaters', True)}, duplicates={data.get('remove_duplicate_faces', True)}, non-manifold={data.get('repair_non_manifold_edges', True)}, small_components={data.get('remove_small_components', True)}")
     glb = o_voxel.postprocess.to_glb(
         vertices=v, faces=f, attr_volume=a, coords=c,
         attr_layout=data['attr_layout'], grid_size=data['grid_size'],
@@ -51,6 +64,21 @@ def run_export(input_path, output_path):
         decimation_target=data['decimation_target'],
         texture_size=data['texture_size'],
         remesh=True, use_tqdm=True,
+        # UV unwrap parameters (PozzettiAndrea/ComfyUI-TRELLIS2 nodes/nodes_unwrap.py:157-160)
+        # Defaults match cumesh.CuMesh.compute_charts() defaults
+        mesh_cluster_threshold_cone_half_angle_rad=np.radians(data.get('uv_cone_angle', 90.0)),
+        mesh_cluster_refine_iterations=data.get('uv_refine_iterations', 100),
+        mesh_cluster_global_iterations=data.get('uv_global_iterations', 3),
+        mesh_cluster_smooth_strength=data.get('uv_smooth_strength', 1),
+        # Mesh processing parameters (PozzettiAndrea/ComfyUI-TRELLIS2 nodes/nodes_unwrap.py:27-30)
+        fill_holes_perimeter=data.get('fill_holes_perimeter', 0.03),
+        remesh_band=data.get('remesh_band', 1.0),
+        # Mesh cleanup options (visualbruno/ComfyUI-Trellis2 nodes.py:682-688, 136-191)
+        remove_floaters=data.get('remove_floaters', True),
+        remove_duplicate_faces=data.get('remove_duplicate_faces', True),
+        repair_non_manifold_edges=data.get('repair_non_manifold_edges', True),
+        remove_small_components=data.get('remove_small_components', True),
+        small_component_threshold=data.get('small_component_threshold', 1e-5),
     )
 
     # --- DER ROBUSTE FIX ---
